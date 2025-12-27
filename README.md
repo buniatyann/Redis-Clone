@@ -137,3 +137,6 @@ Implements all Redis commands as thin wrappers that validate input before callin
 
 ### config/Config
 Reads server configuration from `config.json`.
+
+## License
+This project is open source. See [LICENSE](LICENSE) file for details.
