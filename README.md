@@ -1,88 +1,139 @@
 # Redis Clone
 
-**Redis Clone** is a simple, in-memory key-value store that replicates the basic functionality of the popular database system Redis. It was created from scratch in C++ with the goal of understanding how Redis and server applications work at a deep level. 
-This project is a functional implementation of Redis-like commands, but not optimized for performance in the same way as the official Redis server.
+**Redis Clone** is a simple, in-memory key-value store that replicates the basic functionality of the popular database system Redis. It was created from scratch in C++ with the goal of understanding how Redis and server applications work at a deep level.
 
-**Redis Clone** supports the following Redis commands:
-- `SET`
+## Supported Commands
+
+- `PING` / `ECHO`
+- `SET` (with EX/PX/EXAT/PXAT options)
 - `GET`
 - `EXISTS`
 - `DEL`
-- `INCR`
-- `DECR`
-- `LPUSH`
-- `RPUSH`
+- `INCR` / `DECR`
+- `LPUSH` / `RPUSH`
 - `LRANGE`
 - `SAVE`
+- `CONFIG GET`
 
 **Note**: Redis Clone is not intended to outperform official Redis, but rather to serve as a learning tool for understanding the internal workings of an in-memory database.
 
-## Building Redis Clone
-
-Follow these steps to build **Redis Clone** from source:
-
-1. Clone the repository and set the path to the cloned directory as `$REDIS_HOME`.
-2. Navigate to the `bin` directory:
-    ```bash
-    $ cd $REDIS_HOME
-    $ mkdir ${REDIS_HOME}/bin
-    $ cd bin
-    ```
-3. Build the project using `CMake`:
-    ```bash
-    $ cmake $REDIS_HOME
-    $ make
-    ```
-
-This will generate the executable named `redis` in the `bin` directory.
-
-## Running Redis Clone
-
-To run the **Redis Clone** server:
+## Building
 
 ```bash
-$ cd $REDIS_HOME
-$ bin/redis
+mkdir build && cd build
+cmake ..
+make
 ```
 
-##Key Differences from Official Redis
+The executable `redis` is output to `build/app/redis`.
 
-`Thread Model`: Redis Clone uses one thread per client connection, unlike the official Redis, which uses a single-threaded event loop. This choice was made for simplicity and ease of implementation, avoiding the complexity of async I/O in C++.
+## Running
 
-`Multi-threading and Locking`: Since Redis Clone is multi-threaded, it implements necessary locking to protect against data races.
+```bash
+cd $REDIS_HOME
+./build/app/redis
+```
 
-`Persistence`: Redis Clone supports persistence by dumping snapshots of its in-memory state into a state.json file located in the $REDIS_HOME directory. This is in contrast to Redis, which uses a binary RDB file. The state.json file is human-readable, making it easy to inspect changes to the data. If a previous snapshot exists, myRedis will load it at startup.
+Ensure `config.json` exists in the current directory.
 
-`Configuration`: The server’s settings are controlled via a config.json file, which includes:
+## Project Structure (Storage Engine Architecture)
 
-`port`: The port the server listens on.
+```
+├── app/                        # Application entry point
+│   └── main.cpp
+├── modules/                    # Core library (redis_core)
+│   ├── network/                # Connection handling
+│   │   └── Server.*            # TCP socket, client threads
+│   ├── commands/               # Command execution
+│   │   └── Handler.*           # Command dispatch and implementations
+│   ├── data/                   # Data structures
+│   │   └── Store.*             # Singleton key-value store
+│   ├── protocol/               # Protocol handling
+│   │   ├── RESPParser.*        # RESP protocol parser
+│   │   └── Response.*          # RESP response serialization
+│   ├── persistence/            # Disk I/O
+│   │   └── Snapshot.*          # State save/restore to JSON
+│   ├── config/                 # Configuration
+│   │   └── Config.*            # JSON config loading
+│   └── core/                   # Common utilities
+│       └── Common.*            # I/O helpers, exceptions
+├── third_party/nlohmann/       # JSON library
+└── config/                     # Config file example
+```
 
-`snapshot_period`: The time period (in minutes) for periodic snapshots of the in-memory state.
+## Architecture
 
-## server.cpp
-This is the main file, which starts up the server and launches a new thread for every client connection. This also creates the snapshot thread which periodically wakes up after a fixed time interval to dump Redis Clone's state.
+The project follows **Storage Engine Architecture**, commonly used by databases like Redis and LevelDB:
 
-## RESPParser.cpp (.h)
-Redis uses RESP protocol to exchange messages between server and client.
+```
+Client Request
+      │
+      ▼
+┌─────────────┐
+│   Network   │  TCP socket, client thread handling
+└──────┬──────┘
+       ▼
+┌─────────────┐
+│  Protocol   │  RESP parsing and response serialization
+└──────┬──────┘
+       ▼
+┌─────────────┐
+│  Commands   │  Command dispatch and execution
+└──────┬──────┘
+       ▼
+┌─────────────┐
+│    Data     │  In-memory storage (hash maps, deques)
+└──────┬──────┘
+       ▼
+┌─────────────┐
+│ Persistence │  Periodic snapshots to JSON
+└─────────────┘
+```
 
-Each client request is an array of bulk strings. This file implements the deserialization logic of the client request including the logic to read from client `fd`.
+## Key Differences from Official Redis
 
-Since RESP uses `\r\n` (CRLF) to separate two meaningful items, a RESP parser would have to process the serialized message item by item. Instead of reading item by item from socket, Redis Clone has a read cache of 8192 bytes which prevents parser from making large number of expensive read syscalls.
+| Aspect | Redis Clone | Official Redis |
+|--------|-------------|----------------|
+| Thread Model | One thread per client | Single-threaded event loop |
+| Concurrency | `shared_mutex` locking | No locking needed |
+| Persistence | JSON snapshots | Binary RDB/AOF |
+| Protocol | RESP (subset) | Full RESP2/RESP3 |
 
-Each client thread have a RESPParser object which exposes `read_new_request()` method.
+## Configuration
 
-## redisstore.cpp (.h)
-This file implements the data structures which house all the data stored in myRedis. RedisStore is a singleton class which exposes relevant methods required by redis cmds.
+Settings are controlled via `config.json`:
 
-## cmds.cpp (.h)
-This file houses the implementation of Redis cmds. These are essentially a thin wrapper to do validation of redis cmds before calling actual methods of RedisStore.
+```json
+{
+    "port": 6379,
+    "snapshot_period": 5
+}
+```
 
-## type.cpp (.h)
-To send a reply to redis-client, redis-server also needs to serialize output as per RESP. There are multiple data types supported in RESP each of which have there own serialization logic.
+- `port`: The port the server listens on
+- `snapshot_period`: Time period (in minutes) for periodic snapshots
 
-This file defines a base class `RObject` from which all fancy types (string, error, integers, bulk string, array) inherit. Each sub-class needs to define it's own `serialize()` method as per RESP.
+## Module Details
 
-Arguably some part of RESPParser should have utilized object definitions here, and it might have been nicer to have serialization and deserialization logic in one place. However RESPParser had much more nuances because of validations required before successful deserialization. This is why myRedis has opted to keep them separate.
+### network/Server
+Main server loop that accepts connections and spawns a thread per client. Also starts the periodic snapshot thread.
 
-## config.cpp (.h)
-Enables reading up config from the `config.json` file.
+### protocol/RESPParser
+Deserializes RESP protocol messages. Uses an 8KB read cache to minimize syscalls. Each client thread has its own parser instance.
+
+### protocol/Response
+Serializes responses back to RESP format. Defines base class `Response` with subclasses for each RESP type (SimpleString, Error, Integer, BulkString, Array).
+
+### data/Store
+Singleton class containing the in-memory data structures:
+- `unordered_map<string, ValueEntry>` for key-value pairs with expiry
+- `unordered_map<string, deque<string>>` for list operations
+
+### persistence/Snapshot
+Handles saving/loading state to `state.json`. Runs periodically in a background thread.
+
+### commands/Handler
+Implements all Redis commands as thin wrappers that validate input before calling Store methods.
+
+### config/Config
+Reads server configuration from `config.json`.
